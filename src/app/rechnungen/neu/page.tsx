@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { 
   ArrowLeft, 
@@ -11,6 +12,8 @@ import {
   Download,
   Calculator
 } from 'lucide-react'
+import { supabase } from '@/lib/supabase'
+import { Customer, Product } from '@/types'
 
 interface InvoiceItem {
   id: string
@@ -21,23 +24,16 @@ interface InvoiceItem {
   taxRate: number
 }
 
-// Demo customers
-const customers = [
-  { id: '1', name: 'Müller GmbH', address: 'Hauptstraße 1, 12345 Berlin' },
-  { id: '2', name: 'Schmidt AG', address: 'Industrieweg 5, 54321 München' },
-  { id: '3', name: 'Weber KG', address: 'Marktplatz 10, 11111 Hamburg' },
-]
-
-// Demo products
-const products = [
-  { id: '1', name: 'Webdesign', unit: 'Stunde', price: 95 },
-  { id: '2', name: 'Beratung', unit: 'Stunde', price: 120 },
-  { id: '3', name: 'Entwicklung', unit: 'Stunde', price: 110 },
-  { id: '4', name: 'Wartung (monatlich)', unit: 'Pauschal', price: 250 },
-]
-
 export default function NewInvoicePage() {
-  const [selectedCustomer, setSelectedCustomer] = useState('')
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const [saving, setSaving] = useState(false)
+  const [customers, setCustomers] = useState<Customer[]>([])
+  const [products, setProducts] = useState<Product[]>([])
+  const [invoiceNumber, setInvoiceNumber] = useState('')
+  const [isSmallBusiness, setIsSmallBusiness] = useState(false)
+  
+  const [selectedCustomer, setSelectedCustomer] = useState(searchParams.get('kunde') || '')
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0])
   const [dueDate, setDueDate] = useState(() => {
     const date = new Date()
@@ -51,6 +47,47 @@ export default function NewInvoicePage() {
   const [notes, setNotes] = useState('')
   const [paymentTerms, setPaymentTerms] = useState('Zahlung innerhalb von 14 Tagen ohne Abzug.')
 
+  useEffect(() => {
+    fetchData()
+  }, [])
+
+  async function fetchData() {
+    // Fetch customers
+    const { data: customerData } = await supabase
+      .from('customers')
+      .select('*')
+      .order('company_name')
+    setCustomers(customerData || [])
+
+    // Fetch products
+    const { data: productData } = await supabase
+      .from('products')
+      .select('*')
+      .order('name')
+    setProducts(productData || [])
+
+    // Fetch settings (invoice number + small business status)
+    const { data: settings } = await supabase
+      .from('company_settings')
+      .select('invoice_prefix, next_invoice_number, default_payment_terms, is_small_business')
+      .single()
+    
+    if (settings) {
+      const year = new Date().getFullYear()
+      const num = String(settings.next_invoice_number).padStart(3, '0')
+      setInvoiceNumber(`${settings.invoice_prefix}-${year}-${num}`)
+      setIsSmallBusiness(settings.is_small_business || false)
+      
+      // Update due date based on default payment terms
+      if (settings.default_payment_terms) {
+        const date = new Date()
+        date.setDate(date.getDate() + settings.default_payment_terms)
+        setDueDate(date.toISOString().split('T')[0])
+        setPaymentTerms(`Zahlung innerhalb von ${settings.default_payment_terms} Tagen ohne Abzug.`)
+      }
+    }
+  }
+
   const addItem = () => {
     const newItem: InvoiceItem = {
       id: Date.now().toString(),
@@ -58,7 +95,7 @@ export default function NewInvoicePage() {
       quantity: 1,
       unit: 'Stück',
       unitPrice: 0,
-      taxRate: 19
+      taxRate: isSmallBusiness ? 0 : 19
     }
     setItems([...items, newItem])
   }
@@ -78,21 +115,107 @@ export default function NewInvoicePage() {
   const selectProduct = (itemId: string, productId: string) => {
     const product = products.find(p => p.id === productId)
     if (product) {
-      updateItem(itemId, 'description', product.name)
-      updateItem(itemId, 'unit', product.unit)
-      updateItem(itemId, 'unitPrice', product.price)
+      setItems(items.map(item => 
+        item.id === itemId ? {
+          ...item,
+          description: product.name,
+          unit: product.unit,
+          unitPrice: product.price,
+          taxRate: isSmallBusiness ? 0 : product.tax_rate
+        } : item
+      ))
     }
   }
 
   // Calculate totals
   const subtotal = items.reduce((sum, item) => sum + (item.quantity * item.unitPrice), 0)
   const taxGroups = items.reduce((groups, item) => {
-    const tax = item.quantity * item.unitPrice * (item.taxRate / 100)
-    groups[item.taxRate] = (groups[item.taxRate] || 0) + tax
+    if (!isSmallBusiness) {
+      const tax = item.quantity * item.unitPrice * (item.taxRate / 100)
+      groups[item.taxRate] = (groups[item.taxRate] || 0) + tax
+    }
     return groups
   }, {} as Record<number, number>)
-  const totalTax = Object.values(taxGroups).reduce((sum, tax) => sum + tax, 0)
+  const totalTax = isSmallBusiness ? 0 : Object.values(taxGroups).reduce((sum, tax) => sum + tax, 0)
   const total = subtotal + totalTax
+
+  const handleSave = async (status: 'draft' | 'sent') => {
+    if (!selectedCustomer) {
+      alert('Bitte wähle einen Kunden aus.')
+      return
+    }
+
+    if (items.every(item => !item.description)) {
+      alert('Bitte füge mindestens eine Position hinzu.')
+      return
+    }
+
+    setSaving(true)
+
+    // Create invoice
+    const { data: invoice, error: invoiceError } = await supabase
+      .from('invoices')
+      .insert([{
+        invoice_number: invoiceNumber,
+        customer_id: selectedCustomer,
+        status,
+        issue_date: invoiceDate,
+        due_date: dueDate,
+        delivery_date: deliveryDate || null,
+        subtotal,
+        tax_amount: totalTax,
+        total,
+        notes,
+        payment_terms: paymentTerms
+      }])
+      .select()
+      .single()
+
+    if (invoiceError) {
+      alert('Fehler beim Speichern: ' + invoiceError.message)
+      setSaving(false)
+      return
+    }
+
+    // Create invoice items
+    const invoiceItems = items
+      .filter(item => item.description)
+      .map((item, index) => ({
+        invoice_id: invoice.id,
+        description: item.description,
+        quantity: item.quantity,
+        unit: item.unit,
+        unit_price: item.unitPrice,
+        tax_rate: isSmallBusiness ? 0 : item.taxRate,
+        total: item.quantity * item.unitPrice,
+        sort_order: index
+      }))
+
+    const { error: itemsError } = await supabase
+      .from('invoice_items')
+      .insert(invoiceItems)
+
+    if (itemsError) {
+      alert('Fehler beim Speichern der Positionen: ' + itemsError.message)
+      setSaving(false)
+      return
+    }
+
+    // Update next invoice number
+    const { data: currentSettings } = await supabase
+      .from('company_settings')
+      .select('next_invoice_number')
+      .single()
+    
+    if (currentSettings) {
+      await supabase
+        .from('company_settings')
+        .update({ next_invoice_number: currentSettings.next_invoice_number + 1 })
+        .eq('id', (await supabase.from('company_settings').select('id').single()).data?.id)
+    }
+
+    router.push('/rechnungen')
+  }
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -104,20 +227,35 @@ export default function NewInvoicePage() {
           </Link>
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Neue Rechnung</h1>
-            <p className="text-slate-500">RE-2026-007</p>
+            <p className="text-slate-500">{invoiceNumber}</p>
           </div>
         </div>
         <div className="flex gap-2">
-          <button className="flex items-center gap-2 px-4 py-2 border border-slate-200 hover:bg-slate-50 rounded-lg">
+          <button 
+            onClick={() => handleSave('draft')}
+            disabled={saving}
+            className="flex items-center gap-2 px-4 py-2 border border-slate-200 hover:bg-slate-50 rounded-lg disabled:opacity-50"
+          >
             <Save size={18} />
             Entwurf speichern
           </button>
-          <button className="flex items-center gap-2 px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg">
+          <button 
+            onClick={() => handleSave('sent')}
+            disabled={saving}
+            className="flex items-center gap-2 px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg disabled:opacity-50"
+          >
             <Send size={18} />
-            Rechnung senden
+            Rechnung erstellen
           </button>
         </div>
       </div>
+
+      {/* Small Business Notice */}
+      {isSmallBusiness && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-amber-800 text-sm">
+          <strong>Kleinunternehmer:</strong> Auf dieser Rechnung wird keine MwSt. ausgewiesen (§19 UStG).
+        </div>
+      )}
 
       <div className="grid grid-cols-3 gap-6">
         {/* Main Content */}
@@ -133,7 +271,7 @@ export default function NewInvoicePage() {
               <option value="">Kunde auswählen...</option>
               {customers.map(customer => (
                 <option key={customer.id} value={customer.id}>
-                  {customer.name} - {customer.address}
+                  {customer.company_name} - {customer.city}
                 </option>
               ))}
             </select>
@@ -232,7 +370,8 @@ export default function NewInvoicePage() {
                       <select
                         value={item.taxRate}
                         onChange={(e) => updateItem(item.id, 'taxRate', parseInt(e.target.value))}
-                        className="w-full p-2 border border-slate-200 rounded-lg text-sm"
+                        disabled={isSmallBusiness}
+                        className="w-full p-2 border border-slate-200 rounded-lg text-sm disabled:bg-slate-100"
                       >
                         <option value={19}>19%</option>
                         <option value={7}>7%</option>
@@ -332,12 +471,17 @@ export default function NewInvoicePage() {
                 <span className="text-slate-500">Zwischensumme</span>
                 <span>{subtotal.toLocaleString('de-DE', { minimumFractionDigits: 2 })} €</span>
               </div>
-              {Object.entries(taxGroups).map(([rate, amount]) => (
+              {!isSmallBusiness && Object.entries(taxGroups).map(([rate, amount]) => (
                 <div key={rate} className="flex justify-between text-sm">
                   <span className="text-slate-500">MwSt. {rate}%</span>
                   <span>{amount.toLocaleString('de-DE', { minimumFractionDigits: 2 })} €</span>
                 </div>
               ))}
+              {isSmallBusiness && (
+                <div className="text-xs text-slate-400">
+                  Keine MwSt. (Kleinunternehmer §19 UStG)
+                </div>
+              )}
               <hr className="my-2" />
               <div className="flex justify-between font-bold text-lg">
                 <span>Gesamtbetrag</span>
@@ -350,9 +494,13 @@ export default function NewInvoicePage() {
           <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-200">
             <h2 className="text-lg font-semibold mb-4">Aktionen</h2>
             <div className="space-y-2">
-              <button className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-green-500 hover:bg-green-600 text-white rounded-lg">
+              <button 
+                onClick={() => handleSave('sent')}
+                disabled={saving}
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-green-500 hover:bg-green-600 text-white rounded-lg disabled:opacity-50"
+              >
                 <Send size={18} />
-                Per E-Mail senden
+                Rechnung erstellen
               </button>
               <button className="w-full flex items-center justify-center gap-2 px-4 py-3 border border-slate-200 hover:bg-slate-50 rounded-lg">
                 <Download size={18} />

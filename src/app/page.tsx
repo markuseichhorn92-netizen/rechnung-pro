@@ -10,26 +10,30 @@ import {
   AlertTriangle,
   Euro,
   PlusCircle,
-  ArrowRight
+  ArrowRight,
+  CheckCircle
 } from 'lucide-react'
+import { supabase } from '@/lib/supabase'
 
-// Demo data - will be replaced with Supabase
-const demoStats = {
-  revenue_month: 12450.00,
-  revenue_last_month: 10200.00,
-  open_invoices: 5,
-  open_amount: 8750.00,
-  overdue_invoices: 2,
-  overdue_amount: 3200.00,
-  quotes_pending: 3,
+interface DashboardStats {
+  revenue_month: number
+  revenue_last_month: number
+  open_invoices: number
+  open_amount: number
+  overdue_invoices: number
+  overdue_amount: number
+  quotes_pending: number
+  paid_this_month: number
 }
 
-const recentInvoices = [
-  { id: '1', number: 'RE-2026-001', customer: 'Müller GmbH', amount: 2500, status: 'paid', date: '2026-02-15' },
-  { id: '2', number: 'RE-2026-002', customer: 'Schmidt AG', amount: 1800, status: 'sent', date: '2026-02-14' },
-  { id: '3', number: 'RE-2026-003', customer: 'Weber KG', amount: 3200, status: 'overdue', date: '2026-02-01' },
-  { id: '4', number: 'RE-2026-004', customer: 'Fischer e.K.', amount: 950, status: 'draft', date: '2026-02-16' },
-]
+interface RecentInvoice {
+  id: string
+  invoice_number: string
+  customer?: { company_name: string }
+  total: number
+  status: string
+  issue_date: string
+}
 
 const statusColors: Record<string, string> = {
   draft: 'bg-gray-100 text-gray-700',
@@ -48,8 +52,89 @@ const statusLabels: Record<string, string> = {
 }
 
 export default function Dashboard() {
-  const percentChange = ((demoStats.revenue_month - demoStats.revenue_last_month) / demoStats.revenue_last_month * 100).toFixed(1)
+  const [stats, setStats] = useState<DashboardStats>({
+    revenue_month: 0,
+    revenue_last_month: 0,
+    open_invoices: 0,
+    open_amount: 0,
+    overdue_invoices: 0,
+    overdue_amount: 0,
+    quotes_pending: 0,
+    paid_this_month: 0
+  })
+  const [recentInvoices, setRecentInvoices] = useState<RecentInvoice[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetchDashboardData()
+  }, [])
+
+  async function fetchDashboardData() {
+    const now = new Date()
+    const thisMonth = now.toISOString().slice(0, 7)
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 7)
+    const today = now.toISOString().split('T')[0]
+
+    // Fetch all invoices
+    const { data: invoices } = await supabase
+      .from('invoices')
+      .select('*, customer:customers(company_name)')
+      .order('created_at', { ascending: false })
+
+    // Fetch quotes
+    const { data: quotes } = await supabase
+      .from('quotes')
+      .select('*')
+      .eq('status', 'sent')
+
+    if (invoices) {
+      // Calculate stats
+      const paidThisMonth = invoices.filter(i => 
+        i.status === 'paid' && i.issue_date?.startsWith(thisMonth)
+      )
+      const paidLastMonth = invoices.filter(i => 
+        i.status === 'paid' && i.issue_date?.startsWith(lastMonth)
+      )
+      const openInvoices = invoices.filter(i => i.status === 'sent')
+      const overdueInvoices = invoices.filter(i => 
+        i.status === 'sent' && new Date(i.due_date) < now
+      )
+
+      setStats({
+        revenue_month: paidThisMonth.reduce((sum, i) => sum + i.total, 0),
+        revenue_last_month: paidLastMonth.reduce((sum, i) => sum + i.total, 0),
+        open_invoices: openInvoices.length,
+        open_amount: openInvoices.reduce((sum, i) => sum + i.total, 0),
+        overdue_invoices: overdueInvoices.length,
+        overdue_amount: overdueInvoices.reduce((sum, i) => sum + i.total, 0),
+        quotes_pending: quotes?.length || 0,
+        paid_this_month: paidThisMonth.length
+      })
+
+      // Recent invoices with overdue check
+      const recent = invoices.slice(0, 5).map(inv => ({
+        ...inv,
+        status: inv.status === 'sent' && new Date(inv.due_date) < now ? 'overdue' : inv.status
+      }))
+      setRecentInvoices(recent)
+    }
+
+    setLoading(false)
+  }
+
+  const percentChange = stats.revenue_last_month > 0 
+    ? ((stats.revenue_month - stats.revenue_last_month) / stats.revenue_last_month * 100).toFixed(1)
+    : '0'
   const isPositive = Number(percentChange) >= 0
+
+  if (loading) {
+    return (
+      <div className="text-center py-12">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-500 mx-auto"></div>
+        <p className="mt-2 text-slate-500">Lade Dashboard...</p>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-8">
@@ -81,10 +166,11 @@ export default function Dashboard() {
           </div>
           <div className="flex items-baseline gap-1">
             <span className="text-3xl font-bold text-slate-900">
-              {demoStats.revenue_month.toLocaleString('de-DE')}
+              {stats.revenue_month.toLocaleString('de-DE')}
             </span>
             <span className="text-slate-500">€</span>
           </div>
+          <p className="text-xs text-slate-400 mt-2">{stats.paid_this_month} bezahlte Rechnungen</p>
         </div>
 
         {/* Open Invoices */}
@@ -94,8 +180,8 @@ export default function Dashboard() {
             <Clock size={20} className="text-blue-500" />
           </div>
           <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-slate-900">{demoStats.open_invoices}</span>
-            <span className="text-slate-500">({demoStats.open_amount.toLocaleString('de-DE')} €)</span>
+            <span className="text-3xl font-bold text-slate-900">{stats.open_invoices}</span>
+            <span className="text-slate-500">({stats.open_amount.toLocaleString('de-DE')} €)</span>
           </div>
         </div>
 
@@ -106,8 +192,8 @@ export default function Dashboard() {
             <AlertTriangle size={20} className="text-red-500" />
           </div>
           <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-red-600">{demoStats.overdue_invoices}</span>
-            <span className="text-red-400">({demoStats.overdue_amount.toLocaleString('de-DE')} €)</span>
+            <span className="text-3xl font-bold text-red-600">{stats.overdue_invoices}</span>
+            <span className="text-red-400">({stats.overdue_amount.toLocaleString('de-DE')} €)</span>
           </div>
         </div>
 
@@ -118,7 +204,7 @@ export default function Dashboard() {
             <FileText size={20} className="text-amber-500" />
           </div>
           <div className="flex items-baseline gap-1">
-            <span className="text-3xl font-bold text-slate-900">{demoStats.quotes_pending}</span>
+            <span className="text-3xl font-bold text-slate-900">{stats.quotes_pending}</span>
             <span className="text-slate-500">ausstehend</span>
           </div>
         </div>
@@ -135,30 +221,50 @@ export default function Dashboard() {
             Alle anzeigen <ArrowRight size={16} />
           </Link>
         </div>
-        <div className="divide-y divide-slate-100">
-          {recentInvoices.map((invoice) => (
-            <div key={invoice.id} className="p-4 hover:bg-slate-50 flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className="w-10 h-10 bg-slate-100 rounded-lg flex items-center justify-center">
-                  <FileText size={20} className="text-slate-500" />
+        {recentInvoices.length === 0 ? (
+          <div className="p-8 text-center text-slate-500">
+            <FileText size={40} className="mx-auto mb-3 text-slate-300" />
+            <p>Noch keine Rechnungen erstellt.</p>
+            <Link href="/rechnungen/neu" className="text-green-600 hover:underline text-sm">
+              Erste Rechnung erstellen →
+            </Link>
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {recentInvoices.map((invoice) => (
+              <Link 
+                key={invoice.id} 
+                href={`/rechnungen/${invoice.id}`}
+                className="p-4 hover:bg-slate-50 flex items-center justify-between block"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 bg-slate-100 rounded-lg flex items-center justify-center">
+                    {invoice.status === 'paid' ? (
+                      <CheckCircle size={20} className="text-green-500" />
+                    ) : invoice.status === 'overdue' ? (
+                      <AlertTriangle size={20} className="text-red-500" />
+                    ) : (
+                      <FileText size={20} className="text-slate-500" />
+                    )}
+                  </div>
+                  <div>
+                    <div className="font-medium text-slate-900">{invoice.invoice_number}</div>
+                    <div className="text-sm text-slate-500">{invoice.customer?.company_name || 'Unbekannt'}</div>
+                  </div>
                 </div>
-                <div>
-                  <div className="font-medium text-slate-900">{invoice.number}</div>
-                  <div className="text-sm text-slate-500">{invoice.customer}</div>
+                <div className="flex items-center gap-4">
+                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColors[invoice.status]}`}>
+                    {statusLabels[invoice.status]}
+                  </span>
+                  <div className="text-right">
+                    <div className="font-semibold text-slate-900">{invoice.total.toLocaleString('de-DE')} €</div>
+                    <div className="text-sm text-slate-500">{new Date(invoice.issue_date).toLocaleDateString('de-DE')}</div>
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-4">
-                <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColors[invoice.status]}`}>
-                  {statusLabels[invoice.status]}
-                </span>
-                <div className="text-right">
-                  <div className="font-semibold text-slate-900">{invoice.amount.toLocaleString('de-DE')} €</div>
-                  <div className="text-sm text-slate-500">{new Date(invoice.date).toLocaleDateString('de-DE')}</div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+              </Link>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Quick Actions */}
