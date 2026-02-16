@@ -50,9 +50,10 @@ export default function EinstellungenPage() {
         ...data,
         default_tax_rate: Number(data.default_tax_rate) || 19,
       })
-    } catch (err) {
-      setError('Fehler beim Laden der Einstellungen')
-      console.error(err)
+    } catch (err: any) {
+      const errorMsg = err?.message || err?.toString() || 'Unbekannter Fehler'
+      setError(`Fehler beim Laden: ${errorMsg}`)
+      console.error('Load error:', err)
     } finally {
       setLoading(false)
     }
@@ -68,9 +69,10 @@ export default function EinstellungenPage() {
       await updateCompanySettings(settings)
       setSuccess('Einstellungen gespeichert!')
       setTimeout(() => setSuccess(''), 3000)
-    } catch (err) {
-      setError('Fehler beim Speichern')
-      console.error(err)
+    } catch (err: any) {
+      const errorMsg = err?.message || err?.toString() || 'Unbekannter Fehler'
+      setError(`Fehler beim Speichern: ${errorMsg}`)
+      console.error('Save error:', err)
     } finally {
       setSaving(false)
     }
