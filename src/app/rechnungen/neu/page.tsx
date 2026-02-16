@@ -513,3 +513,12 @@ function NewInvoiceContent() {
     </div>
   )
 }
+
+
+export default function NewInvoicePage() {
+  return (
+    <Suspense fallback={<div className="p-8">Laden...</div>}>
+      <NewInvoiceContent />
+    </Suspense>
+  )
+}
