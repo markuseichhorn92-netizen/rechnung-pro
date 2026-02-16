@@ -461,9 +461,27 @@ export async function getCompanySettings(): Promise<CompanySettings> {
 export async function updateCompanySettings(settings: Partial<CompanySettings>) {
   const current = await getCompanySettings()
   
+  // Only include fields that exist in the database
+  const safeSettings: Record<string, unknown> = {}
+  const allowedFields = [
+    'company_name', 'owner_name', 'address', 'zip_code', 'city', 'country',
+    'email', 'phone', 'website', 'tax_id', 'vat_id',
+    'bank_name', 'iban', 'bic', 'logo_url',
+    'invoice_prefix', 'next_invoice_number', 'quote_prefix', 'next_quote_number',
+    'default_payment_terms', 'default_tax_rate', 'footer_text', 'is_small_business'
+  ]
+  
+  for (const key of allowedFields) {
+    if (key in settings && settings[key as keyof CompanySettings] !== undefined) {
+      safeSettings[key] = settings[key as keyof CompanySettings]
+    }
+  }
+  
+  safeSettings.updated_at = new Date().toISOString()
+  
   const { data, error } = await supabase
     .from('company_settings')
-    .update({ ...settings, updated_at: new Date().toISOString() })
+    .update(safeSettings)
     .eq('id', current.id)
     .select()
     .single()
