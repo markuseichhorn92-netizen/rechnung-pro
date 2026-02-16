@@ -242,12 +242,8 @@ export default function InvoiceDetailPage() {
               fileName={`${invoice.invoice_number}.pdf`}
               className="flex items-center gap-2 px-4 py-2 border border-slate-200 hover:bg-slate-50 rounded-lg"
             >
-              {({ loading: pdfLoading }) => (
-                <>
-                  <Download size={18} />
-                  {pdfLoading ? 'Erstelle PDF...' : 'PDF herunterladen'}
-                </>
-              )}
+              <Download size={18} />
+              PDF herunterladen
             </PDFDownloadLink>
           )}
         </div>
