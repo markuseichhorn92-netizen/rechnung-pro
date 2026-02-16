@@ -73,6 +73,7 @@ export interface Quote {
   tax_amount: number
   total: number
   notes?: string
+  converted_to_invoice_id?: string
   created_at: string
 }
 
