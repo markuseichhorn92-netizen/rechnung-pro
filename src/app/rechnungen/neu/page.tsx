@@ -188,7 +188,7 @@ function NewInvoiceContent() {
         unit_price: item.unitPrice,
         tax_rate: isSmallBusiness ? 0 : item.taxRate,
         total: item.quantity * item.unitPrice,
-        sort_order: index
+        position: index
       }))
 
     const { error: itemsError } = await supabase
