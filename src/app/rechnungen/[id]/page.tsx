@@ -3,29 +3,15 @@
 import { useEffect, useState } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
-import dynamic from 'next/dynamic'
 import { 
   ArrowLeft, 
   Download, 
   Mail, 
   CheckCircle,
-  Clock,
   FileText,
-  Edit,
-  Printer
+  Edit
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-
-// Dynamic import for PDF (client-side only)
-const PDFDownloadLink = dynamic(
-  () => import('@react-pdf/renderer').then(mod => mod.PDFDownloadLink),
-  { ssr: false, loading: () => <span>Lade PDF...</span> }
-)
-
-const InvoicePDF = dynamic(
-  () => import('@/components/InvoicePDF'),
-  { ssr: false }
-)
 
 interface InvoiceItem {
   id: string
@@ -87,6 +73,59 @@ const statusConfig: Record<string, { label: string; color: string }> = {
   cancelled: { label: 'Storniert', color: 'bg-gray-100 text-gray-500' },
 }
 
+// PDF Component that loads dynamically
+function PDFButton({ invoice, items, customer, company }: {
+  invoice: Invoice
+  items: InvoiceItem[]
+  customer: Customer
+  company: CompanySettings
+}) {
+  const [PDFDownloadLink, setPDFDownloadLink] = useState<any>(null)
+  const [InvoicePDF, setInvoicePDF] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    Promise.all([
+      import('@react-pdf/renderer'),
+      import('@/components/InvoicePDF')
+    ]).then(([pdfRenderer, pdfComponent]) => {
+      setPDFDownloadLink(() => pdfRenderer.PDFDownloadLink)
+      setInvoicePDF(() => pdfComponent.default)
+      setLoading(false)
+    })
+  }, [])
+
+  if (loading || !PDFDownloadLink || !InvoicePDF) {
+    return (
+      <button disabled className="flex items-center gap-2 px-4 py-2 border border-slate-200 rounded-lg opacity-50">
+        <Download size={18} />
+        Lade PDF...
+      </button>
+    )
+  }
+
+  return (
+    <PDFDownloadLink
+      document={
+        <InvoicePDF
+          invoice={{ ...invoice, items }}
+          customer={customer}
+          company={company}
+        />
+      }
+      fileName={`${invoice.invoice_number}.pdf`}
+      className="flex items-center gap-2 px-4 py-2 border border-slate-200 hover:bg-slate-50 rounded-lg"
+    >
+      {({ loading: pdfLoading }: { loading: boolean }) => (
+        <>
+          <Download size={18} />
+          {pdfLoading ? 'Erstelle PDF...' : 'PDF herunterladen'}
+        </>
+      )}
+    </PDFDownloadLink>
+  )
+}
+
 export default function InvoiceDetailPage() {
   const router = useRouter()
   const params = useParams()
@@ -101,7 +140,6 @@ export default function InvoiceDetailPage() {
   }, [params.id])
 
   async function fetchInvoice() {
-    // Fetch invoice
     const { data: invoiceData, error: invoiceError } = await supabase
       .from('invoices')
       .select('*')
@@ -116,16 +154,14 @@ export default function InvoiceDetailPage() {
 
     setInvoice(invoiceData)
 
-    // Fetch items
     const { data: itemsData } = await supabase
       .from('invoice_items')
       .select('*')
       .eq('invoice_id', params.id)
-      .order('sort_order')
+      .order('position')
     
     setItems(itemsData || [])
 
-    // Fetch customer
     const { data: customerData } = await supabase
       .from('customers')
       .select('*')
@@ -134,7 +170,6 @@ export default function InvoiceDetailPage() {
     
     setCustomer(customerData)
 
-    // Fetch company settings
     const { data: companyData } = await supabase
       .from('company_settings')
       .select('*')
@@ -177,9 +212,8 @@ export default function InvoiceDetailPage() {
 
   if (loading) {
     return (
-      <div className="text-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-500 mx-auto"></div>
-        <p className="mt-2 text-slate-500">Lade Rechnung...</p>
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500"></div>
       </div>
     )
   }
@@ -189,8 +223,6 @@ export default function InvoiceDetailPage() {
   }
 
   const status = statusConfig[invoice.status] || statusConfig.draft
-
-  // Check if overdue
   const isOverdue = invoice.status === 'sent' && new Date(invoice.due_date) < new Date()
 
   return (
@@ -230,22 +262,19 @@ export default function InvoiceDetailPage() {
               Als bezahlt markieren
             </button>
           )}
-          {company && customer && (
-            <PDFDownloadLink
-              document={
-                <InvoicePDF
-                  invoice={{ ...invoice, items }}
-                  customer={customer}
-                  company={company}
-                />
-              }
-              fileName={`${invoice.invoice_number}.pdf`}
-              className="flex items-center gap-2 px-4 py-2 border border-slate-200 hover:bg-slate-50 rounded-lg"
-            >
-              <Download size={18} />
-              PDF herunterladen
-            </PDFDownloadLink>
-          )}
+          <PDFButton 
+            invoice={invoice} 
+            items={items} 
+            customer={customer} 
+            company={company} 
+          />
+          <Link
+            href={`/rechnungen/${invoice.id}/bearbeiten`}
+            className="flex items-center gap-2 px-4 py-2 border border-slate-200 hover:bg-slate-50 rounded-lg"
+          >
+            <Edit size={18} />
+            Bearbeiten
+          </Link>
         </div>
       </div>
 
@@ -320,8 +349,8 @@ export default function InvoiceDetailPage() {
                 <td className="py-3">{item.description}</td>
                 <td className="py-3 text-right">{item.quantity}</td>
                 <td className="py-3 text-center text-slate-500">{item.unit}</td>
-                <td className="py-3 text-right">{item.unit_price.toLocaleString('de-DE', { minimumFractionDigits: 2 })} €</td>
-                <td className="py-3 text-right font-medium">{item.total.toLocaleString('de-DE', { minimumFractionDigits: 2 })} €</td>
+                <td className="py-3 text-right">{Number(item.unit_price).toLocaleString('de-DE', { minimumFractionDigits: 2 })} €</td>
+                <td className="py-3 text-right font-medium">{Number(item.total).toLocaleString('de-DE', { minimumFractionDigits: 2 })} €</td>
               </tr>
             ))}
           </tbody>
@@ -332,17 +361,17 @@ export default function InvoiceDetailPage() {
           <div className="w-64">
             <div className="flex justify-between py-2 text-sm">
               <span className="text-slate-500">Zwischensumme:</span>
-              <span>{invoice.subtotal.toLocaleString('de-DE', { minimumFractionDigits: 2 })} €</span>
+              <span>{Number(invoice.subtotal).toLocaleString('de-DE', { minimumFractionDigits: 2 })} €</span>
             </div>
             {!company.is_small_business && invoice.tax_amount > 0 && (
               <div className="flex justify-between py-2 text-sm">
                 <span className="text-slate-500">MwSt.:</span>
-                <span>{invoice.tax_amount.toLocaleString('de-DE', { minimumFractionDigits: 2 })} €</span>
+                <span>{Number(invoice.tax_amount).toLocaleString('de-DE', { minimumFractionDigits: 2 })} €</span>
               </div>
             )}
             <div className="flex justify-between py-3 border-t-2 border-green-500 font-bold text-lg">
               <span>Gesamtbetrag:</span>
-              <span className="text-green-600">{invoice.total.toLocaleString('de-DE', { minimumFractionDigits: 2 })} €</span>
+              <span className="text-green-600">{Number(invoice.total).toLocaleString('de-DE', { minimumFractionDigits: 2 })} €</span>
             </div>
           </div>
         </div>
@@ -355,17 +384,19 @@ export default function InvoiceDetailPage() {
         )}
 
         {/* Payment Info */}
-        <div className="mt-8 p-4 bg-slate-50 rounded-lg">
-          <h4 className="font-semibold mb-2">Zahlungsinformationen</h4>
-          <p className="text-sm text-slate-600">{invoice.payment_terms}</p>
-          {company.bank_name && (
-            <div className="text-sm text-slate-600 mt-2">
-              <p>Bank: {company.bank_name}</p>
-              {company.iban && <p>IBAN: {company.iban}</p>}
-              {company.bic && <p>BIC: {company.bic}</p>}
-            </div>
-          )}
-        </div>
+        {(invoice.payment_terms || company.bank_name) && (
+          <div className="mt-8 p-4 bg-slate-50 rounded-lg">
+            <h4 className="font-semibold mb-2">Zahlungsinformationen</h4>
+            {invoice.payment_terms && <p className="text-sm text-slate-600">{invoice.payment_terms}</p>}
+            {company.bank_name && (
+              <div className="text-sm text-slate-600 mt-2">
+                <p>Bank: {company.bank_name}</p>
+                {company.iban && <p>IBAN: {company.iban}</p>}
+                {company.bic && <p>BIC: {company.bic}</p>}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Notes */}
         {invoice.notes && (
